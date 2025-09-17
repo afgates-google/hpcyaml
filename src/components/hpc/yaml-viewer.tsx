@@ -3,13 +3,13 @@
 import { useState, useEffect, useMemo } from 'react';
 import type { ConfiguredHpcComponent } from '@/lib/types';
 import { useDebounce } from '@/hooks/use-debounce';
-import { validateYamlConfiguration } from '@/ai/flows/validate-yaml-configuration';
+import { validateYamlWithApi, ValidateYamlWithApiOutput } from '@/ai/flows/validate-yaml-with-api';
+import { estimateCostWithApi, EstimateCostWithApiOutput } from '@/ai/flows/estimate-cost-with-api';
 import { useToast } from '@/hooks/use-toast';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { CheckCircle, Download, Loader, XCircle } from 'lucide-react';
-import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '../ui/table';
 
 interface YamlViewerProps {
@@ -21,31 +21,81 @@ function generateYaml(components: ConfiguredHpcComponent[]): string {
     return "# Add components from the catalog to generate the YAML configuration.";
   }
 
-  let yaml = 'apiVersion: hpc.gcp.com/v1alpha1\n';
-  yaml += 'kind: HpcCluster\n';
-  yaml += 'metadata:\n';
-  yaml += '  name: hpc-cluster-example\n';
-  yaml += 'spec:\n';
-  yaml += '  components:\n';
+  // --- Start of YAML generation ---
+  let blueprintName = "hpc-cluster-example";
 
-  components.forEach(comp => {
-    yaml += `    - name: ${comp.instanceId}\n`;
-    yaml += `      type: ${comp.name.toLowerCase().replace(/ /g, '-')}\n`;
-    yaml += `      category: ${comp.category}\n`;
-    yaml += '      settings:\n';
-    Object.entries(comp.configuredValues).forEach(([key, value]) => {
-      yaml += `        ${key}: ${value}\n`;
-    });
+  // Base structure
+  const blueprint: any = {
+    blueprint_name: blueprintName,
+    vars: {
+      project_id: "your-gcp-project-id", // Fix: Add default project_id
+      deployment_name: "hpc-deployment",
+      region: "us-central1",
+      zone: "us-central1-a",
+    },
+    deployment_groups: [
+      {
+        group: "primary",
+        modules: [],
+      },
+    ],
+  };
+
+  // Dynamically add modules from configured components
+  const modules = components.map(comp => {
+    const settings: Record<string, any> = { ...comp.configuredValues };
+    const module: Record<string, any> = {
+      id: comp.instanceId,
+      source: `community/modules/${comp.category}/${comp.id}`, // Example source
+      settings: settings,
+    };
+    return module;
   });
-  return yaml;
+
+  blueprint.deployment_groups[0].modules = modules;
+
+  // Convert JSON object to YAML string
+  // This is a simplified conversion. For complex cases, a library might be better.
+  const toYaml = (js: object, indent = 0): string => {
+    let yamlString = '';
+    const space = '  '.repeat(indent);
+
+    for (const key in js) {
+      if (Object.prototype.hasOwnProperty.call(js, key)) {
+        const value = (js as any)[key];
+        if (Array.isArray(value)) {
+          yamlString += `${space}${key}:\n`;
+          value.forEach(item => {
+            if (typeof item === 'object' && item !== null) {
+              const arrayItemStr = toYaml(item, indent + 2);
+              yamlString += `${space}  - ${arrayItemStr.trimStart()}\n`;
+            } else {
+              yamlString += `${space}  - ${item}\n`;
+            }
+          });
+        } else if (typeof value === 'object' && value !== null) {
+          yamlString += `${space}${key}:\n`;
+          yamlString += toYaml(value, indent + 1);
+        } else {
+          yamlString += `${space}${key}: ${value}\n`;
+        }
+      }
+    }
+    return yamlString;
+  };
+
+  return toYaml(blueprint);
 }
+
 
 export function YamlViewer({ configuredComponents }: YamlViewerProps) {
   const { toast } = useToast();
   const [yamlString, setYamlString] = useState('');
-  const [validationResult, setValidationResult] = useState<{ isValid: boolean; errors: string[] } | null>(null);
+  const [validationResult, setValidationResult] = useState<ValidateYamlWithApiOutput | null>(null);
+  const [costResult, setCostResult] = useState<EstimateCostWithApiOutput | null>(null);
   const [isValidating, setIsValidating] = useState(false);
-  
+  const [isEstimatingCost, setIsEstimatingCost] = useState(false);
+
   const debouncedYaml = useDebounce(yamlString, 1000);
 
   useEffect(() => {
@@ -55,6 +105,7 @@ export function YamlViewer({ configuredComponents }: YamlViewerProps) {
   useEffect(() => {
     if (!debouncedYaml || debouncedYaml.startsWith('#')) {
       setValidationResult(null);
+      setCostResult(null);
       return;
     }
 
@@ -62,8 +113,8 @@ export function YamlViewer({ configuredComponents }: YamlViewerProps) {
       setIsValidating(true);
       setValidationResult(null);
       try {
-        const result = await validateYamlConfiguration({ yamlConfiguration: debouncedYaml });
-        setValidationResult(result);
+        const result = await validateYamlWithApi({ yaml_content: debouncedYaml, region: 'us-central1', zone: 'us-central1-a' });
+        setValidationResult({ is_valid: result.is_valid, errors: result.errors });
       } catch (error) {
         console.error("Validation failed:", error);
         toast({
@@ -75,25 +126,28 @@ export function YamlViewer({ configuredComponents }: YamlViewerProps) {
         setIsValidating(false);
       }
     };
+
+    const estimateCost = async () => {
+      setIsEstimatingCost(true);
+      setCostResult(null);
+      try {
+        const result = await estimateCostWithApi({ yaml_content: debouncedYaml, region: 'us-central1', zone: 'us-central1-a' });
+        setCostResult(result);
+      } catch (error) {
+        console.error("Cost estimation failed:", error);
+        toast({
+          variant: "destructive",
+          title: "Cost Estimation Error",
+          description: "Could not connect to the cost estimation service.",
+        });
+      } finally {
+        setIsEstimatingCost(false);
+      }
+    };
+
     validate();
+    estimateCost();
   }, [debouncedYaml, toast]);
-  
-  const costData = useMemo(() => {
-    return configuredComponents.map(c => {
-        let quantity = 1;
-        if(c.category === 'compute' && c.configuredValues.cpuCount) {
-             quantity = Number(c.configuredValues.cpuCount);
-        }
-        if(c.category === 'storage' && c.configuredValues.size) {
-            quantity = Number(c.configuredValues.size);
-        }
-        const total = c.cost * quantity;
-        return { name: c.name, quantity, unit: c.costUnit, costPerUnit: c.cost, total };
-    });
-  }, [configuredComponents]);
-
-  const totalCost = useMemo(() => costData.reduce((sum, item) => sum + item.total, 0), [costData]);
-
 
   const handleDownload = () => {
     const blob = new Blob([yamlString], { type: 'application/x-yaml;charset=utf-8' });
@@ -114,7 +168,7 @@ export function YamlViewer({ configuredComponents }: YamlViewerProps) {
     if (!validationResult) {
       return <div className="text-muted-foreground">Awaiting input...</div>;
     }
-    if (validationResult.isValid) {
+    if (validationResult.is_valid) {
       return <div className="flex items-center gap-2 text-primary"><CheckCircle className="w-4 h-4" /> <span>Configuration is valid.</span></div>;
     }
     return <div className="flex items-center gap-2 text-destructive"><XCircle className="w-4 h-4" /> <span>Validation failed.</span></div>;
@@ -128,11 +182,18 @@ export function YamlViewer({ configuredComponents }: YamlViewerProps) {
             <div className="flex items-center gap-2">
                 <span>Validation</span>
                 {isValidating ? <Loader className="animate-spin w-3 h-3"/> : validationResult && (
-                    validationResult.isValid ? <CheckCircle className="w-3 h-3 text-primary"/> : <XCircle className="w-3 h-3 text-destructive"/>
+                    validationResult.is_valid ? <CheckCircle className="w-3 h-3 text-primary"/> : <XCircle className="w-3 h-3 text-destructive"/>
                 )}
             </div>
         </TabsTrigger>
-        <TabsTrigger value="cost">Cost</TabsTrigger>
+        <TabsTrigger value="cost">
+          <div className="flex items-center gap-2">
+            <span>Cost</span>
+            {isEstimatingCost ? <Loader className="animate-spin w-3 h-3"/> : costResult && (
+              <CheckCircle className="w-3 h-3 text-primary"/>
+            )}
+          </div>
+        </TabsTrigger>
       </TabsList>
       <TabsContent value="yaml" className="flex-1 flex flex-col overflow-hidden mt-4">
         <ScrollArea className="flex-1 rounded-md border">
@@ -145,7 +206,7 @@ export function YamlViewer({ configuredComponents }: YamlViewerProps) {
       <TabsContent value="validation" className="flex-1 overflow-y-auto mt-4">
         <div className="p-4 rounded-lg border space-y-4">
             <h3 className="font-semibold"><ValidationStatus/></h3>
-            {validationResult && !validationResult.isValid && (
+            {validationResult && !validationResult.is_valid && (
                 <div className="space-y-2">
                     <h4 className="font-medium text-sm">Errors:</h4>
                     <ul className="list-disc pl-5 space-y-1">
@@ -159,33 +220,31 @@ export function YamlViewer({ configuredComponents }: YamlViewerProps) {
       </TabsContent>
       <TabsContent value="cost" className="flex-1 overflow-y-auto mt-4">
         <div className="space-y-4">
-            <Table>
-                <TableHeader>
-                    <TableRow>
-                        <TableHead>Component</TableHead>
-                        <TableHead className="text-right">Total Cost</TableHead>
-                    </TableRow>
-                </TableHeader>
-                <TableBody>
-                    {costData.map((item, i) => (
-                        <TableRow key={i}>
-                            <TableCell>
-                                <div className="font-medium">{item.name}</div>
-                                <div className="text-xs text-muted-foreground">
-                                    {item.quantity.toLocaleString()} x ${item.costPerUnit.toFixed(2)} / {item.unit}
-                                </div>
-                            </TableCell>
-                            <TableCell className="text-right">${item.total.toFixed(2)}</TableCell>
+            {isEstimatingCost && <div className="flex items-center justify-center p-8"><Loader className="animate-spin w-8 h-8 text-muted-foreground" /></div>}
+            {costResult && (
+              <Table>
+                  <TableHeader>
+                      <TableRow>
+                          <TableHead>Component</TableHead>
+                          <TableHead className="text-right">Monthly Cost</TableHead>
+                      </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                      {Object.entries(costResult.cost_breakdown).map(([key, value]) => (
+                        <TableRow key={key}>
+                          <TableCell>{key}</TableCell>
+                          <TableCell className="text-right">${typeof value === 'number' ? value.toFixed(2) : value}</TableCell>
                         </TableRow>
-                    ))}
-                </TableBody>
-                <TableFooter>
-                    <TableRow>
-                        <TableCell className="font-bold text-base">Estimated Total</TableCell>
-                        <TableCell className="text-right font-bold text-base text-primary">${totalCost.toFixed(2)} / hr</TableCell>
-                    </TableRow>
-                </TableFooter>
-            </Table>
+                      ))}
+                  </TableBody>
+                  <TableFooter>
+                      <TableRow>
+                          <TableCell className="font-bold text-base">Estimated Total</TableCell>
+                          <TableCell className="text-right font-bold text-base text-primary">${costResult.total_cost.toFixed(2)} / month</TableCell>
+                      </TableRow>
+                  </TableFooter>
+              </Table>
+            )}
             <p className="text-xs text-muted-foreground text-center pt-2">
                 This is an estimate. Actual costs may vary.
             </p>
