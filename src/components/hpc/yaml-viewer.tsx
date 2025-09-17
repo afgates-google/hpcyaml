@@ -86,6 +86,9 @@ function generateYaml(components: ConfiguredHpcComponent[]): string {
   return toYaml(blueprint);
 }
 
+interface YamlViewerProps {
+  configuredComponents: ConfiguredHpcComponent[];
+}
 
 export function YamlViewer({ configuredComponents }: YamlViewerProps) {
   const { toast } = useToast();
