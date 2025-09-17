@@ -11,15 +11,14 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { CheckCircle, Download, Loader, XCircle } from 'lucide-react';
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '../ui/table';
-
-interface YamlViewerProps {
-  configuredComponents: ConfiguredHpcComponent[];
-}
+import { app } from '@/lib/firebase'; // Import Firebase app instance
 
 function generateYaml(components: ConfiguredHpcComponent[]): string {
   if (components.length === 0) {
     return "# Add components from the catalog to generate the YAML configuration.";
   }
+  
+  const projectId = app.options.projectId || 'your-gcp-project-id';
 
   // --- Start of YAML generation ---
   let blueprintName = "hpc-cluster-example";
@@ -28,7 +27,7 @@ function generateYaml(components: ConfiguredHpcComponent[]): string {
   const blueprint: any = {
     blueprint_name: blueprintName,
     vars: {
-      project_id: "your-gcp-project-id", // Fix: Add default project_id
+      project_id: projectId,
       deployment_name: "hpc-deployment",
       region: "us-central1",
       zone: "us-central1-a",
