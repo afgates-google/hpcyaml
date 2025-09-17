@@ -11,7 +11,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { CheckCircle, Download, Loader, XCircle } from 'lucide-react';
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '../ui/table';
-import { app } from '@/lib/firebase'; // Import Firebase app instance
+import { app } from '@/lib/firebase';
 
 function generateYaml(components: ConfiguredHpcComponent[]): string {
   if (components.length === 0) {
@@ -20,10 +20,8 @@ function generateYaml(components: ConfiguredHpcComponent[]): string {
   
   const projectId = app.options.projectId || 'your-gcp-project-id';
 
-  // --- Start of YAML generation ---
   let blueprintName = "hpc-cluster-example";
 
-  // Base structure
   const blueprint: any = {
     blueprint_name: blueprintName,
     vars: {
@@ -40,12 +38,11 @@ function generateYaml(components: ConfiguredHpcComponent[]): string {
     ],
   };
 
-  // Dynamically add modules from configured components
   const modules = components.map(comp => {
     const settings: Record<string, any> = { ...comp.configuredValues };
     const module: Record<string, any> = {
       id: comp.instanceId,
-      source: `community/modules/${comp.category}/${comp.id}`, // Example source
+      source: `community/modules/${comp.category}/${comp.id}`, 
       settings: settings,
     };
     return module;
@@ -53,8 +50,6 @@ function generateYaml(components: ConfiguredHpcComponent[]): string {
 
   blueprint.deployment_groups[0].modules = modules;
 
-  // Convert JSON object to YAML string
-  // This is a simplified conversion. For complex cases, a library might be better.
   const toYaml = (js: object, indent = 0): string => {
     let yamlString = '';
     const space = '  '.repeat(indent);
@@ -199,7 +194,7 @@ export function YamlViewer({ configuredComponents }: YamlViewerProps) {
       </TabsList>
       <TabsContent value="yaml" className="flex-1 flex flex-col overflow-hidden mt-4">
         <ScrollArea className="flex-1 rounded-md border">
-            <pre className="text-xs p-4 font-mono"><code >{yamlString}</code></pre>
+            <pre className="text-xs p-4 font-mono"><code>{yamlString}</code></pre>
         </ScrollArea>
         <Button onClick={handleDownload} className="mt-4 w-full" disabled={configuredComponents.length === 0}>
             <Download className="mr-2 h-4 w-4" /> Export YAML
